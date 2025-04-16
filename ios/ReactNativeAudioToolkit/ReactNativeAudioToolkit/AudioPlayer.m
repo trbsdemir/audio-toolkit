@@ -54,14 +54,14 @@
 
 - (NSURL *)findUrlForPath:(NSString *)path {
     NSURL *url = nil;
-    
+
     NSArray *pathComponents = [NSArray arrayWithObjects:
                                [NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES) lastObject],
                                path,
                                nil];
-    
+
     NSString *possibleUrl = [NSString pathWithComponents:pathComponents];
-    
+
     if (![[NSFileManager defaultManager] fileExistsAtPath:possibleUrl]) {
         NSString *fileWithoutExtension = [path stringByDeletingPathExtension];
         NSString *extension = [path pathExtension];
@@ -77,12 +77,12 @@
             } else {
                 url = [NSURL URLWithString:path];
             }
-            
+
         }
     } else {
         url = [NSURL fileURLWithPathComponents:pathComponents];
     }
-    
+
     return url;
 }
 
@@ -94,11 +94,11 @@ RCT_EXPORT_MODULE();
 RCT_EXPORT_METHOD(prepare:(nonnull NSNumber*)playerId
                   withPath:(NSString* _Nullable)path
                   withOptions:(NSDictionary *)options
-                  withCallback:(RCTResponseSenderBlock)callback)
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
 {
     if ([path length] == 0) {
-        NSDictionary* dict = [Helpers errObjWithCode:@"invalidpath" withMessage:@"Provided path was empty"];
-        callback(@[dict]);
+        reject(@"invalidpath", @"Provided path was empty", nil);
         return;
     }
 
@@ -107,8 +107,7 @@ RCT_EXPORT_METHOD(prepare:(nonnull NSNumber*)playerId
         // Inline data
         NSData *data = [Helpers decodeBase64DataUrl:path];
         if (!data) {
-            NSDictionary* dict = [Helpers errObjWithCode:@"invalidpath" withMessage:@"Invalid data:audio URL"];
-            callback(@[dict]);
+            reject(@"invalidpath", @"Invalid data:audio URL", nil);
             return;
         }
         item = (ReactPlayerItem *)[ReactPlayerItem playerItemWithData: data];
@@ -116,25 +115,23 @@ RCT_EXPORT_METHOD(prepare:(nonnull NSNumber*)playerId
         // Try to find the correct file
         NSURL *url = [self findUrlForPath:path];
         if (!url) {
-            NSDictionary* dict = [Helpers errObjWithCode:@"invalidpath" withMessage:@"No file found at path"];
-            callback(@[dict]);
+            reject(@"invalidpath", @"No file found at path", nil);
             return;
         }
         item = (ReactPlayerItem *)[ReactPlayerItem playerItemWithURL: url];
     }
     if (!item) {
-        NSDictionary* dict = [Helpers errObjWithCode:@"preparefail" withMessage:@"Error initializing player item"];
-        callback(@[dict]);
+        reject(@"preparefail", @"Error initializing player item", nil);
         return;
     }
     item.reactPlayerId = playerId;
-    
+
     // Add notification to know when file has stopped playing
     [[NSNotificationCenter defaultCenter] addObserver:self
                                              selector:@selector(itemDidFinishPlaying:)
                                                  name:AVPlayerItemDidPlayToEndTimeNotification
                                                object:item];
-    
+
     // Set audio session
     NSNumber *category = [options objectForKey:@"category"];
     NSString *avAudioSessionCategory;
@@ -154,16 +151,14 @@ RCT_EXPORT_METHOD(prepare:(nonnull NSNumber*)playerId
     NSError *error = nil;
     [[AVAudioSession sharedInstance] setCategory: avAudioSessionCategory withOptions: mixWithOthers.intValue > 0 ? AVAudioSessionCategoryOptionMixWithOthers : 0 error: &error];
     if (error) {
-        NSDictionary* dict = [Helpers errObjWithCode:@"preparefail"
-                                         withMessage:@"Failed to set audio session category."];
-        callback(@[dict]);
+        reject(@"preparefail", @"Failed to set audio session category.", error);
         return;
     }
-    
+
     // Initialize player
     ReactPlayer* player = [[ReactPlayer alloc]
                         initWithPlayerItem:item];
-    
+
     // If successful, check options and add to player pool
     if (player) {
         NSNumber *autoDestroy = [options objectForKey:@"autoDestroy"];
@@ -174,12 +169,10 @@ RCT_EXPORT_METHOD(prepare:(nonnull NSNumber*)playerId
         [[self playerPool] setObject:player forKey:playerId];
     } else {
         NSString *errMsg = [NSString stringWithFormat:@"Could not initialize player, error: %@", error];
-        NSDictionary* dict = [Helpers errObjWithCode:@"preparefail"
-                                         withMessage:errMsg];
-        callback(@[dict]);
+        reject(@"preparefail", errMsg, error);
         return;
     }
-    
+
     // Prepare the player
     // Wait until player is ready or has failed
     while (player.status == AVPlayerStatusUnknown) {
@@ -188,9 +181,7 @@ RCT_EXPORT_METHOD(prepare:(nonnull NSNumber*)playerId
 
     if (player.status == AVPlayerStatusFailed) {
         NSString *errMsg = [NSString stringWithFormat:@"Could not initialize player, error: %@", player.error];
-        NSDictionary* dict = [Helpers errObjWithCode:@"preparefail"
-                                         withMessage:errMsg];
-        callback(@[dict]);
+        reject(@"preparefail", errMsg, player.error);
         return;
     }
 
@@ -201,9 +192,7 @@ RCT_EXPORT_METHOD(prepare:(nonnull NSNumber*)playerId
 
     if (player.currentItem.status == AVPlayerItemStatusFailed) {
         NSString *errMsg = [NSString stringWithFormat:@"Could not initialize player, error: %@", player.currentItem.error];
-        NSDictionary* dict = [Helpers errObjWithCode:@"preparefail"
-                                         withMessage:errMsg];
-        callback(@[dict]);
+        reject(@"preparefail", errMsg, player.currentItem.error);
         return;
     }
 
@@ -211,7 +200,7 @@ RCT_EXPORT_METHOD(prepare:(nonnull NSNumber*)playerId
     while (player.currentItem.loadedTimeRanges.firstObject == nil){
         [NSThread sleepForTimeInterval:0.01f];
     }
-    
+
     //wait until 10 seconds are buffered then play
     float version = [[[UIDevice currentDevice] systemVersion] floatValue];
     if (version >= 10.0) {
@@ -229,40 +218,42 @@ RCT_EXPORT_METHOD(prepare:(nonnull NSNumber*)playerId
         loadedDurationSeconds = CMTimeGetSeconds(timeRange.duration);
         [NSThread sleepForTimeInterval:0.01f];
     }
-    
+
     // Callback when ready / failed
     if (player.currentItem.status == AVPlayerStatusReadyToPlay) {
         player.automaticallyWaitsToMinimizeStalling = false;
-        callback(@[[NSNull null], @{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000)}]);
+        resolve(@{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000)});
     } else {
-        NSDictionary* dict = [Helpers errObjWithCode:@"preparefail"
-                                         withMessage:[NSString stringWithFormat:@"Preparing player failed"]];
-        
+        NSString *errMsg = @"Preparing player failed";
+
         if (player.autoDestroy) {
             [self destroyPlayerWithId:playerId];
         }
-        
-        callback(@[dict]);
+
+        reject(@"preparefail", errMsg, nil);
     }
 }
 
-RCT_EXPORT_METHOD(destroy:(nonnull NSNumber*)playerId withCallback:(RCTResponseSenderBlock)callback) {
+RCT_EXPORT_METHOD(destroy:(nonnull NSNumber*)playerId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
     [self destroyPlayerWithId:playerId];
-    callback(@[[NSNull null]]);
+    resolve(@[]);
 }
 
-RCT_EXPORT_METHOD(seek:(nonnull NSNumber*)playerId withPos:(nonnull NSNumber*)position withCallback:(RCTResponseSenderBlock)callback) {
+RCT_EXPORT_METHOD(seek:(nonnull NSNumber*)playerId
+                  withPos:(nonnull NSNumber*)position
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
     ReactPlayer* player = (ReactPlayer *)[self playerForKey:playerId];
-    
+
     if (!player) {
-        NSDictionary* dict = [Helpers errObjWithCode:@"notfound"
-                                         withMessage:[NSString stringWithFormat:@"playerId %@ not found.", playerId]];
-        callback(@[dict]);
+        reject(@"notfound", [NSString stringWithFormat:@"playerId %@ not found.", playerId], nil);
         return;
     }
-    
+
     [player cancelPendingPrerolls];
-    
+
     if (position >= 0) {
         NSLog(@"%@", position);
         if (position == 0) {
@@ -271,44 +262,45 @@ RCT_EXPORT_METHOD(seek:(nonnull NSNumber*)playerId withPos:(nonnull NSNumber*)po
              toleranceBefore:kCMTimeZero // for precise positioning
              toleranceAfter:kCMTimeZero
              completionHandler:^(BOOL finished) {
-                 callback(@[[NSNull null], @{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
-                                             @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)}]);
+                 resolve(@{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
+                           @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)});
              }];
         } else {
             [player.currentItem
              seekToTime:CMTimeMakeWithSeconds([position doubleValue] / 1000, 60000)
              completionHandler:^(BOOL finished) {
-                 callback(@[[NSNull null], @{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
-                                             @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)}]);
+                 resolve(@{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
+                           @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)});
              }];
         }
     }
 }
 
-RCT_EXPORT_METHOD(play:(nonnull NSNumber*)playerId withCallback:(RCTResponseSenderBlock)callback) {
+RCT_EXPORT_METHOD(play:(nonnull NSNumber*)playerId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
     ReactPlayer* player = (ReactPlayer *)[self playerForKey:playerId];
 
     if (!player) {
-        NSDictionary* dict = [Helpers errObjWithCode:@"notfound"
-                                         withMessage:[NSString stringWithFormat:@"playerId %@ not found.", playerId]];
-        callback(@[dict]);
+        reject(@"notfound", [NSString stringWithFormat:@"playerId %@ not found.", playerId], nil);
         return;
     }
 
     [player play];
     player.rate = player.speed;
 
-    callback(@[[NSNull null], @{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
-                                @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)}]);
+    resolve(@{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
+              @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)});
 }
 
-RCT_EXPORT_METHOD(set:(nonnull NSNumber*)playerId withOpts:(NSDictionary*)options withCallback:(RCTResponseSenderBlock)callback) {
+RCT_EXPORT_METHOD(set:(nonnull NSNumber*)playerId
+                  withOpts:(NSDictionary*)options
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
     ReactPlayer *player = (ReactPlayer *)[self playerForKey:playerId];
 
     if (!player) {
-        NSDictionary* dict = [Helpers errObjWithCode:@"notfound"
-                                         withMessage:[NSString stringWithFormat:@"playerId %@ not found.", playerId]];
-        callback(@[dict]);
+        reject(@"notfound", [NSString stringWithFormat:@"playerId %@ not found.", playerId], nil);
         return;
     }
 
@@ -334,74 +326,74 @@ RCT_EXPORT_METHOD(set:(nonnull NSNumber*)playerId withOpts:(NSDictionary*)option
         }
     }
 
-    callback(@[[NSNull null]]);
+    resolve(@[]);
 }
 
-RCT_EXPORT_METHOD(stop:(nonnull NSNumber*)playerId withCallback:(RCTResponseSenderBlock)callback) {
+RCT_EXPORT_METHOD(stop:(nonnull NSNumber*)playerId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
     ReactPlayer* player = (ReactPlayer *)[self playerForKey:playerId];
-    
+
     if (!player) {
-        NSDictionary* dict = [Helpers errObjWithCode:@"notfound"
-                                         withMessage:[NSString stringWithFormat:@"playerId %@ not found.", playerId]];
-        callback(@[dict]);
+        reject(@"notfound", [NSString stringWithFormat:@"playerId %@ not found.", playerId], nil);
         return;
     }
-    
+
     [player pause];
     if (player.autoDestroy) {
         [self destroyPlayerWithId:playerId];
     } else {
         [player.currentItem seekToTime:CMTimeMakeWithSeconds(0.0, 60000)];
     }
-    
-    callback(@[[NSNull null], @{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
-                                @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)}]);
+
+    resolve(@{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
+              @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)});
 }
 
-RCT_EXPORT_METHOD(pause:(nonnull NSNumber*)playerId withCallback:(RCTResponseSenderBlock)callback) {
+RCT_EXPORT_METHOD(pause:(nonnull NSNumber*)playerId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
     ReactPlayer* player = (ReactPlayer *)[self playerForKey:playerId];
-    
+
     if (!player) {
-        NSDictionary* dict = [Helpers errObjWithCode:@"notfound"
-                                         withMessage:[NSString stringWithFormat:@"playerId %@ not found.", playerId]];
-        callback(@[dict]);
+        reject(@"notfound", [NSString stringWithFormat:@"playerId %@ not found.", playerId], nil);
         return;
     }
-    
+
     [player pause];
 
-    callback(@[[NSNull null], @{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
-                                @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)}]);
+    resolve(@{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
+              @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)});
 }
 
-RCT_EXPORT_METHOD(resume:(nonnull NSNumber*)playerId withCallback:(RCTResponseSenderBlock)callback) {
+RCT_EXPORT_METHOD(resume:(nonnull NSNumber*)playerId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
     ReactPlayer* player = (ReactPlayer *)[self playerForKey:playerId];
 
     if (!player) {
-        NSDictionary* dict = [Helpers errObjWithCode:@"notfound"
-                                         withMessage:[NSString stringWithFormat:@"playerId %@ not found.", playerId]];
-        callback(@[dict]);
+        reject(@"notfound", [NSString stringWithFormat:@"playerId %@ not found.", playerId], nil);
         return;
     }
 
     [player play];
     player.rate = player.speed;
 
-    callback(@[[NSNull null]]);
+    resolve(@[]);
 }
 
-RCT_EXPORT_METHOD(getCurrentTime:(nonnull NSNumber*)playerId withCallback:(RCTResponseSenderBlock)callback) {
+RCT_EXPORT_METHOD(getCurrentTime:(nonnull NSNumber*)playerId
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject) {
     ReactPlayer* player = (ReactPlayer *)[self playerForKey:playerId];
 
     if (!player) {
-        NSDictionary* dict = [Helpers errObjWithCode:@"notfound"
-                                         withMessage:[NSString stringWithFormat:@"playerId %@ not found.", playerId]];
-        callback(@[dict]);
+        reject(@"notfound", [NSString stringWithFormat:@"playerId %@ not found.", playerId], nil);
         return;
     }
 
-    callback(@[[NSNull null], @{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
-                                @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)}]);
+    resolve(@{@"duration": @(CMTimeGetSeconds(player.currentItem.asset.duration) * 1000),
+              @"position": @(CMTimeGetSeconds(player.currentTime) * 1000)});
 }
 
 -(void)itemDidFinishPlaying:(NSNotification *) notification {
@@ -411,9 +403,8 @@ RCT_EXPORT_METHOD(getCurrentTime:(nonnull NSNumber*)playerId withCallback:(RCTRe
         [self destroyPlayerWithId:playerId];
         player = nil;
     } else {
-        [self seek:playerId withPos:@0 withCallback:^(NSArray *response) {
-            return;
-        }];
+        // Use promise-based seek implementation within the method
+        [player.currentItem seekToTime:CMTimeMakeWithSeconds(0.0, 60000)];
     }
     if (player && player.looping) {
         // Send looping event and start playing again

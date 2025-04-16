@@ -11,7 +11,7 @@ import com.facebook.react.bridge.Arguments;
 import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
-import com.facebook.react.bridge.Callback;
+import com.facebook.react.bridge.Promise;
 import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.WritableNativeMap;
@@ -109,7 +109,7 @@ public class AudioRecorderModule extends ReactContextBaseJavaModule implements
     private int encoderFromName(String name) {
         switch (name) {
             case "aac-lc":
-                return MediaRecorder.AudioEncoder.AAC;      
+                return MediaRecorder.AudioEncoder.AAC;
             case "aac":
                 return MediaRecorder.AudioEncoder.AAC;
             case "mp4":
@@ -145,7 +145,7 @@ public class AudioRecorderModule extends ReactContextBaseJavaModule implements
 
         return uri;
     }
-    
+
     // metering methods
     private void startMeteringTimer(int monitorInterval) {
         meteringUpdateTimer = new Timer();
@@ -180,7 +180,7 @@ public class AudioRecorderModule extends ReactContextBaseJavaModule implements
     }
 
     @ReactMethod
-    public void destroy(Integer recorderId, Callback callback) {
+    public void destroy(Integer recorderId, Promise promise) {
         MediaRecorder recorder = this.recorderPool.get(recorderId);
 
         if (recorder != null) {
@@ -198,8 +198,8 @@ public class AudioRecorderModule extends ReactContextBaseJavaModule implements
             emitEvent(recorderId, "info", data);
         }
 
-        if (callback != null) {
-            callback.invoke();
+        if (promise != null) {
+            promise.resolve(null);
         }
     }
 
@@ -208,9 +208,9 @@ public class AudioRecorderModule extends ReactContextBaseJavaModule implements
     }
 
     @ReactMethod
-    public void prepare(Integer recorderId, String path, ReadableMap options, Callback callback) {
+    public void prepare(Integer recorderId, String path, ReadableMap options, Promise promise) {
         if (path == null || path.isEmpty()) {
-            callback.invoke(errObj("invalidpath", "Provided path was empty"));
+            promise.reject("invalidpath", "Provided path was empty");
             return;
         }
 
@@ -256,15 +256,10 @@ public class AudioRecorderModule extends ReactContextBaseJavaModule implements
         recorder.setAudioChannels(channels);
         recorder.setAudioSamplingRate(sampleRate);
 
-        Log.d(LOG_TAG, "Recorder using options: (format: " + format + ") (encoder: " + encoder + ") "
-                    + "(bitrate: " + bitrate + ") (channels: " + channels + ") (sampleRate: " + sampleRate + ")");
-
         recorder.setOutputFile(uri.getPath());
 
         recorder.setOnErrorListener(this);
         recorder.setOnInfoListener(this);
-
-        this.recorderPool.put(recorderId, recorder);
 
         // Auto destroy recorder by default
         boolean autoDestroy = true;
@@ -273,103 +268,108 @@ public class AudioRecorderModule extends ReactContextBaseJavaModule implements
             autoDestroy = options.getBoolean("autoDestroy");
         }
 
+        // metering
+        if (options.hasKey("meteringInterval") && options.getInt("meteringInterval") > 0) {
+            meteringInterval = options.getInt("meteringInterval");
+        } else {
+            meteringInterval = 0;
+        }
+
+        this.recorderPool.put(recorderId, recorder);
         this.recorderAutoDestroy.put(recorderId, autoDestroy);
 
         try {
             recorder.prepare();
 
-            callback.invoke(null, uri.getPath());
-        } catch (IOException e) {
-            callback.invoke(errObj("preparefail", e.toString()));
+            WritableMap result = Arguments.createMap();
+            result.putString("format", "" + format);
+            result.putString("encoder", "" + encoder);
+            result.putInt("bitrate", bitrate);
+            result.putInt("channels", channels);
+            result.putInt("sampleRate", sampleRate);
+            result.putString("path", uri.getPath());
+
+            promise.resolve(result);
+        } catch (Exception e) {
+            promise.reject("preparefail", e.toString());
+        }
+    }
+
+    @ReactMethod
+    public void record(Integer recorderId, Promise promise) {
+        MediaRecorder recorder = this.recorderPool.get(recorderId);
+        if (recorder == null) {
+            promise.reject("notfound", "recorderId " + recorderId + " not found.");
+            return;
         }
 
-        if (options.hasKey("meteringInterval")) {
-            int meteringInterval = options.getInt("meteringInterval");
-            if (meteringRecorderId != null) {
-                Log.i(LOG_TAG, "multiple recorder metering are not currently supporter. Metering will be active on the last recorder.");
-            }
-            if (meteringInterval <= 0) {
-                Log.w(LOG_TAG, "metering interval must be grater then 0. Ignoring metering");
-            } else {
+        try {
+            recorder.start();
+            if (meteringInterval > 0) {
                 meteringRecorder = recorder;
                 meteringRecorderId = recorderId;
-                this.meteringInterval = meteringInterval;
-            }
-        }
-    }
-
-    @ReactMethod
-    public void record(Integer recorderId, Callback callback) {
-        MediaRecorder recorder = this.recorderPool.get(recorderId);
-        if (recorder == null) {
-            callback.invoke(errObj("notfound", "recorderId " + recorderId + "not found."));
-            return;
-        }
-
-        try {
-            if (recorderId == meteringRecorderId) {
+                // set timer for metering
                 startMeteringTimer(meteringInterval);
             }
-            recorder.start();
 
-            callback.invoke();
+            promise.resolve(null);
         } catch (Exception e) {
-            callback.invoke(errObj("startfail", e.toString()));
+            promise.reject("startfail", e.toString());
         }
     }
 
     @ReactMethod
-    public void stop(Integer recorderId, Callback callback) {
+    public void stop(Integer recorderId, Promise promise) {
         MediaRecorder recorder = this.recorderPool.get(recorderId);
         if (recorder == null) {
-            callback.invoke(errObj("notfound", "recorderId " + recorderId + "not found."));
+            promise.reject("notfound", "recorderId " + recorderId + " not found.");
             return;
         }
 
         try {
+            recorder.stop();
             if (recorderId == meteringRecorderId) {
                 stopMeteringTimer();
             }
-            recorder.stop();
+
             if (this.recorderAutoDestroy.get(recorderId)) {
                 Log.d(LOG_TAG, "Autodestroying recorder...");
                 destroy(recorderId);
             }
-            callback.invoke();
+
+            promise.resolve(null);
         } catch (Exception e) {
-            callback.invoke(errObj("stopfail", e.toString()));
+            promise.reject("stopfail", e.toString());
         }
     }
 
     @ReactMethod
-    public void pause(Integer recorderId, Callback callback) {
+    public void pause(Integer recorderId, Promise promise) {
         if (android.os.Build.VERSION.SDK_INT < 24) {
-            callback.invoke(errObj("notsupported", "Android version doesn't support pause"));
+            promise.reject("notsupported", "Cannot pause recording on Android SDK Version " +  android.os.Build.VERSION.SDK_INT + ". Minimum is 24.");
             return;
         }
-        pause24(recorderId,callback);
+
+        pause24(recorderId, promise);
     }
 
     @TargetApi(24)
-    private void pause24(Integer recorderId, Callback callback) {
+    private void pause24(Integer recorderId, Promise promise) {
         MediaRecorder recorder = this.recorderPool.get(recorderId);
         if (recorder == null) {
-            callback.invoke(errObj("notfound", "recorderId " + recorderId + "not found."));
+            promise.reject("notfound", "recorderId " + recorderId + " not found.");
             return;
         }
 
         try {
+            recorder.pause();
             if (recorderId == meteringRecorderId) {
                 stopMeteringTimer();
             }
-            recorder.pause();
-            if (this.recorderAutoDestroy.get(recorderId)) {
-                Log.d(LOG_TAG, "Autodestroying recorder...");
-                destroy(recorderId);
-            }
-            callback.invoke();
+
+            promise.resolve(null);
         } catch (Exception e) {
-            callback.invoke(errObj("stopfail", e.toString()));
+            promise.reject("pausefail", e.toString());
         }
     }
 

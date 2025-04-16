@@ -19,11 +19,11 @@ import com.facebook.react.bridge.ReactApplicationContext;
 import com.facebook.react.bridge.ReactContext;
 import com.facebook.react.bridge.ReactContextBaseJavaModule;
 import com.facebook.react.bridge.ReactMethod;
-import com.facebook.react.bridge.Callback;
 import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.bridge.WritableMap;
 import com.facebook.react.bridge.WritableNativeMap;
 import com.facebook.react.modules.core.DeviceEventManagerModule;
+import com.facebook.react.bridge.Promise;
 
 import java.io.IOException;
 import java.io.File;
@@ -40,7 +40,7 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
     Map<Integer, MediaPlayer> playerPool = new HashMap<>();
     Map<Integer, Boolean> playerAutoDestroy = new HashMap<>();
     Map<Integer, Boolean> playerContinueInBackground = new HashMap<>();
-    Map<Integer, Callback> playerSeekCallback = new HashMap<>();
+    Map<Integer, Promise> playerSeekCallback = new HashMap<>();
     Map<Integer, Float> playerSpeed = new HashMap<>();
 
     boolean looping = false;
@@ -185,7 +185,7 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
     }
 
     @ReactMethod
-    public void destroy(Integer playerId, Callback callback) {
+    public void destroy(Integer playerId, Promise promise) {
         MediaPlayer player = this.playerPool.get(playerId);
 
         if (player != null) {
@@ -202,8 +202,8 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
             emitEvent(playerId, "info", data);
         }
 
-        if (callback != null) {
-            callback.invoke();
+        if (promise != null) {
+            promise.resolve(null);
         }
     }
 
@@ -212,22 +212,22 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
     }
 
     @ReactMethod
-    public void seek(Integer playerId, Integer position, Callback callback) {
+    public void seek(Integer playerId, Integer position, Promise promise) {
         MediaPlayer player = this.playerPool.get(playerId);
         if (player == null) {
-            callback.invoke(errObj("notfound", "playerId " + playerId + " not found."));
+            promise.reject("notfound", "playerId " + playerId + " not found.");
             return;
         }
 
         if (position >= 0) {
-            Callback oldCallback = this.playerSeekCallback.get(playerId);
+            Promise oldCallback = this.playerSeekCallback.get(playerId);
 
             if (oldCallback != null) {
-                oldCallback.invoke(errObj("seekfail", "new seek operation before old one completed", false));
+                oldCallback.reject("seekfail", "new seek operation before old one completed");
                 this.playerSeekCallback.remove(playerId);
             }
 
-            this.playerSeekCallback.put(playerId, callback);
+            this.playerSeekCallback.put(playerId, promise);
             player.seekTo(position);
         }
     }
@@ -243,9 +243,9 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
     }
 
     @ReactMethod
-    public void prepare(Integer playerId, String path, ReadableMap options, final Callback callback) {
+    public void prepare(Integer playerId, String path, ReadableMap options, final Promise promise) {
         if (path == null || path.isEmpty()) {
-            callback.invoke(errObj("nopath", "Provided path was empty"));
+            promise.reject("nopath", "Provided path was empty");
             return;
         }
 
@@ -253,23 +253,14 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
         destroy(playerId);
         this.lastPlayerId = playerId;
 
-        //MediaPlayer player = MediaPlayer.create(this.context, uri, null, attributes);
         MediaPlayer player = new MediaPlayer();
 
-        /*
-        AudioAttributes attributes = new AudioAttributes.Builder()
-            .setUsage(AudioAttributes.USAGE_UNKNOWN)
-            .setContentType(AudioAttributes.CONTENT_TYPE_UNKNOWN)
-            .build();
-
-        player.setAudioAttributes(attributes);
-        */
         if (path.startsWith("data:audio/")) {
             // Inline data
              try {
                  player.setDataSource(path);
              } catch (IOException e) {
-                callback.invoke(errObj("invalidpath", e.toString()));
+                promise.reject("invalidpath", e.toString());
                 return;
             }
         } else {
@@ -278,7 +269,7 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
                 Log.d(LOG_TAG, uri.getPath());
                 player.setDataSource(this.context, uri);
             } catch (IOException e) {
-                callback.invoke(errObj("invalidpath", e.toString()));
+                promise.reject("invalidpath", e.toString());
                 return;
             }
         }
@@ -291,7 +282,7 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
 
             @Override
             public void onPrepared(MediaPlayer player) {
-                callback.invoke(null, getInfo(player));
+                promise.resolve(getInfo(player));
             }
 
         });
@@ -325,15 +316,15 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
         try {
             player.prepareAsync();
         } catch (Exception e) {
-            callback.invoke(errObj("prepare", e.toString()));
+            promise.reject("prepare", e.toString());
         }
     }
 
     @ReactMethod
-    public void set(Integer playerId, ReadableMap options, Callback callback) {
+    public void set(Integer playerId, ReadableMap options, Promise promise) {
         MediaPlayer player = this.playerPool.get(playerId);
         if (player == null) {
-            callback.invoke(errObj("notfound", "playerId " + playerId + " not found."));
+            promise.reject("notfound", "playerId " + playerId + " not found.");
             return;
         }
 
@@ -380,19 +371,20 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
 
             player.setPlaybackParams(params);
 
+            boolean needToPauseAfterSet = false;
             if (needToPauseAfterSet && player.isPlaying()) {
                 player.pause();
             }
         }
 
-        callback.invoke();
+        promise.resolve(null);
     }
 
     @ReactMethod
-    public void play(Integer playerId, Callback callback) {
+    public void play(Integer playerId, Promise promise) {
         MediaPlayer player = this.playerPool.get(playerId);
         if (player == null) {
-            callback.invoke(errObj("notfound", "playerId " + playerId + " not found."));
+            promise.reject("notfound", "playerId " + playerId + " not found.");
             return;
         }
 
@@ -418,22 +410,21 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
                 player.start();
             }
 
-            callback.invoke(null, getInfo(player));
+            promise.resolve(getInfo(player));
         } catch (Exception e) {
-            callback.invoke(errObj("playback", e.toString()));
+            promise.reject("playback", e.toString());
         }
     }
 
     @ReactMethod
-    public void pause(Integer playerId, Callback callback) {
+    public void pause(Integer playerId, Promise promise) {
         MediaPlayer player = this.playerPool.get(playerId);
         if (player == null) {
-            callback.invoke(errObj("notfound", "playerId " + playerId + " not found."));
+            promise.reject("notfound", "playerId " + playerId + " not found.");
             return;
         }
 
         try {
-
             player.pause();
 
             WritableMap info = getInfo(player);
@@ -444,18 +435,18 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
 
             emitEvent(playerId, "pause", data);
 
-            callback.invoke(null, getInfo(player));
+            promise.resolve(getInfo(player));
 
         } catch (Exception e) {
-            callback.invoke(errObj("pause", e.toString()));
+            promise.reject("pause", e.toString());
         }
     }
 
     @ReactMethod
-    public void stop(Integer playerId, Callback callback) {
+    public void stop(Integer playerId, Promise promise) {
         MediaPlayer player = this.playerPool.get(playerId);
         if (player == null) {
-            callback.invoke(errObj("notfound", "playerId " + playerId + " not found."));
+            promise.reject("notfound", "playerId " + playerId + " not found.");
             return;
         }
 
@@ -464,39 +455,38 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
                 player.pause();
                 Log.d(LOG_TAG, "stop(): Autodestroying player...");
                 destroy(playerId);
-                callback.invoke();
+                promise.resolve(null);
             } else {
                 // "Fake" stopping on Android by pausing and seeking to 0 so
                 // that we remain in prepared state
-                Callback oldCallback = this.playerSeekCallback.get(playerId);
+                Promise oldCallback = this.playerSeekCallback.get(playerId);
 
                 if (oldCallback != null) {
-                    oldCallback.invoke(errObj("seekfail", "Playback stopped before seek operation could finish"));
+                    oldCallback.reject("seekfail", "Playback stopped before seek operation could finish");
                     this.playerSeekCallback.remove(playerId);
                 }
 
-                this.playerSeekCallback.put(playerId, callback);
-
+                this.playerSeekCallback.put(playerId, promise);
                 player.seekTo(0);
                 player.pause();
             }
         } catch (Exception e) {
-            callback.invoke(errObj("stop", e.toString()));
+            promise.reject("stop", e.toString());
         }
     }
 
     @ReactMethod
-    public void getCurrentTime(Integer playerId, Callback callback) {
+    public void getCurrentTime(Integer playerId, Promise promise) {
         MediaPlayer player = this.playerPool.get(playerId);
         if (player == null) {
-            callback.invoke(errObj("notfound", "playerId " + playerId + " not found."));
+            promise.reject("notfound", "playerId " + playerId + " not found.");
             return;
         }
 
         try {
-            callback.invoke(null, getInfo(player));
+            promise.resolve(getInfo(player));
         } catch (Exception e) {
-            callback.invoke(errObj("getCurrentTime", e.toString()));
+            promise.reject("getCurrentTime", e.toString());
         }
     }
 
@@ -526,9 +516,9 @@ public class AudioPlayerModule extends ReactContextBaseJavaModule implements Med
         Integer playerId = getPlayerId(player);
 
         // Invoke seek callback
-        Callback callback = this.playerSeekCallback.get(playerId);
+        Promise callback = this.playerSeekCallback.get(playerId);
         if (callback != null) {
-            callback.invoke(null, getInfo(player));
+            callback.resolve(getInfo(player));
             this.playerSeekCallback.remove(playerId);
         }
 

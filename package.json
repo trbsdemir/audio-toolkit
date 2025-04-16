@@ -1,9 +1,8 @@
 {
-  "name": "@react-native-community/audio-toolkit",
-  "version": "2.0.3",
-  "description": "Cross-platform audio library for React Native",
-  "main": "index.js",
-  "types": "typings/index.d.ts",
+  "name": "@developer_tribe/audio-toolkit",
+  "version": "1.0.0",
+  "description": "Based on react-native-audio-toolkit. Migrated to TypeScript and fixed compatibility issues for React Native New Architecture. Full support is in progress.",
+  "main": "src/index.ts",
   "directories": {
     "doc": "docs"
   },
@@ -20,7 +19,6 @@
     "url": "https://github.com/react-native-community/react-native-audio-toolkit/issues"
   },
   "dependencies": {
-    "async": "^2.6.3",
     "eventemitter3": "^1.2.0",
     "lodash": "^4.17.19"
   },
