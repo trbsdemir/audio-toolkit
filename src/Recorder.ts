@@ -21,7 +21,7 @@ interface RCTAudioRecorderInterface {
   pause: (recorderId: number) => Promise<void>;
 }
 
-const RCTAudioRecorder = NativeModules.RCTAudioRecorder as RCTAudioRecorderInterface;
+const RCTAudioRecorder = Platform.OS === 'ios' ? NativeModules.AudioRecorder : NativeModules.RCTAudioRecorder;
 
 let recorderId = 0;
 

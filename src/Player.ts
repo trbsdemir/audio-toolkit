@@ -7,7 +7,7 @@ import identity from 'lodash/identity';
 import last from 'lodash/last';
 import noop from 'lodash/noop';
 
-const RCTAudioPlayer = NativeModules.RCTAudioPlayer;
+const RCTAudioPlayer = Platform.OS === 'ios' ? NativeModules.AudioPlayer : NativeModules.RCTAudioPlayer;
 let playerId = 0;
 
 export enum PlaybackCategories {
