@@ -2,9 +2,8 @@ import { NativeModules, DeviceEventEmitter, NativeAppEventEmitter, Platform } fr
 import EventEmitter from 'eventemitter3';
 import MediaStates from './MediaStates';
 
-import filter from 'lodash/filter';
 import identity from 'lodash/identity';
-import last from 'lodash/last';
+import {find} from 'lodash';
 import noop from 'lodash/noop';
 
 const RCTAudioPlayer = Platform.OS === 'ios' ? NativeModules.AudioPlayer : NativeModules.RCTAudioPlayer;
@@ -124,7 +123,7 @@ class Player extends EventEmitter {
     }
 
     // Use last truthy value from results array as new media info
-    const info = last(filter(results, identity));
+    const info = find(results, identity);
     this._storeInfo(info);
   }
 
@@ -355,15 +354,15 @@ class Player extends EventEmitter {
   get volume(): number {
     return this._volume;
   }
-  
+
   get looping(): boolean {
     return this._looping;
   }
-  
+
   get duration(): number {
     return this._duration;
   }
-  
+
   get speed(): number {
     return this._speed;
   }
@@ -371,34 +370,34 @@ class Player extends EventEmitter {
   get state(): number {
     return this._state;
   }
-  
+
   get canPlay(): boolean {
     return this._state >= MediaStates.PREPARED;
   }
-  
+
   get canStop(): boolean {
     return this._state >= MediaStates.PLAYING;
   }
-  
+
   get canPrepare(): boolean {
     return this._state == MediaStates.IDLE;
   }
-  
+
   get isPlaying(): boolean {
     return this._state == MediaStates.PLAYING;
   }
-  
+
   get isStopped(): boolean {
     return this._state <= MediaStates.PREPARED;
   }
-  
+
   get isPaused(): boolean {
     return this._state == MediaStates.PAUSED;
   }
-  
+
   get isPrepared(): boolean {
     return this._state == MediaStates.PREPARED;
   }
 }
 
-export default Player; 
+export default Player;

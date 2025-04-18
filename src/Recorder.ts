@@ -1,5 +1,3 @@
-'use strict';
-
 import {
   NativeModules,
   DeviceEventEmitter,
@@ -66,7 +64,7 @@ class Recorder extends EventEmitter {
     const appEventEmitter = Platform.OS === 'ios' ? NativeAppEventEmitter : DeviceEventEmitter;
 
     this._eventSubscription = appEventEmitter.addListener(
-      'RCTAudioRecorderEvent:' + this._recorderId, 
+      'RCTAudioRecorderEvent:' + this._recorderId,
       (payload: EventPayload) => {
         this._handleEvent(payload.event, payload.data);
       }
@@ -106,7 +104,7 @@ class Recorder extends EventEmitter {
     // Use the native promise directly
     const preparePromise: Promise<string> = RCTAudioRecorder.prepare(this._recorderId, this._path, this._options)
       .then((fsPath: string) => {
-        this._fsPath = fsPath;
+        this._fsPath = fsPath?.path ?? fsPath;
         this._updateState(null, MediaStates.PREPARED);
         return fsPath;
       })
@@ -225,4 +223,4 @@ class Recorder extends EventEmitter {
   get fsPath(): string | undefined { return this._fsPath; }
 }
 
-export default Recorder; 
+export default Recorder;
